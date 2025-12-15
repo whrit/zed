@@ -18,8 +18,6 @@ pub fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[gpui::test]
     fn test_init_compiles() {
         // This test just ensures the init function compiles correctly

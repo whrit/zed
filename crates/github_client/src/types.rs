@@ -236,7 +236,7 @@ pub struct ReviewComment {
     pub body: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {
     pub device_code: String,
     pub user_code: String,
@@ -252,7 +252,7 @@ pub struct DeviceTokenRequest {
     pub grant_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DeviceTokenResponse {
     Success { access_token: String },

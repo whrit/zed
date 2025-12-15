@@ -117,7 +117,7 @@ mod tests {
             state: PullRequestState::Merged,
         };
 
-        let item = PRListItem::new(pr.clone());
+        let item = PRListItem::new(pr);
         assert_eq!(item.pull_request.number, 456);
     }
 }
