@@ -77,6 +77,7 @@ members = [
     "crates/git",
     "crates/git_hosting_providers",
     "crates/git_ui",
+    "crates/github_client",
     "crates/go_to_line",
     "crates/google_ai",
     "crates/gpui",
@@ -126,6 +127,7 @@ members = [
     "crates/panel",
     "crates/paths",
     "crates/picker",
+    "crates/pr_ui",
     "crates/prettier",
     "crates/project",
     "crates/project_benchmarks",
@@ -302,6 +304,7 @@ fuzzy = { path = "crates/fuzzy" }
 git = { path = "crates/git" }
 git_hosting_providers = { path = "crates/git_hosting_providers" }
 git_ui = { path = "crates/git_ui" }
+github_client = { path = "crates/github_client" }
 go_to_line = { path = "crates/go_to_line" }
 google_ai = { path = "crates/google_ai" }
 gpui = { path = "crates/gpui", default-features = false }
@@ -356,6 +359,7 @@ panel = { path = "crates/panel" }
 paths = { path = "crates/paths" }
 perf = { path = "tooling/perf" }
 picker = { path = "crates/picker" }
+pr_ui = { path = "crates/pr_ui" }
 prettier = { path = "crates/prettier" }
 settings_profile_selector = { path = "crates/settings_profile_selector" }
 project = { path = "crates/project" }
