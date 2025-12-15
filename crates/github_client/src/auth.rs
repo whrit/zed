@@ -1,5 +1,5 @@
 use crate::{DeviceCodeResponse, DeviceTokenResponse, GitHubClient};
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 const GITHUB_OAUTH_URL: &str = "https://github.com/login";
 

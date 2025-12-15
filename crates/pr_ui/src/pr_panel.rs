@@ -90,7 +90,7 @@ impl Panel for PRPanel {
     }
 
     fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
-        Some(IconName::GitPullRequest)
+        Some(IconName::PullRequest)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -125,7 +125,7 @@ impl Render for PRPanel {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Icon::new(IconName::GitPullRequest))
+                                .child(Icon::new(IconName::PullRequest))
                                 .child(Label::new("Pull Requests")),
                         ),
                 ),

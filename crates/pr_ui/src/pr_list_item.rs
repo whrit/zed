@@ -19,7 +19,7 @@ pub enum PullRequestState {
 impl PullRequestState {
     pub fn icon(&self) -> IconName {
         match self {
-            PullRequestState::Open => IconName::GitPullRequest,
+            PullRequestState::Open => IconName::PullRequest,
             PullRequestState::Closed => IconName::XCircle,
             PullRequestState::Merged => IconName::Check,
         }
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_pull_request_state_icon() {
-        assert_eq!(PullRequestState::Open.icon(), IconName::GitPullRequest);
+        assert_eq!(PullRequestState::Open.icon(), IconName::PullRequest);
         assert_eq!(PullRequestState::Closed.icon(), IconName::XCircle);
         assert_eq!(PullRequestState::Merged.icon(), IconName::Check);
     }
