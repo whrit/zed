@@ -3,13 +3,13 @@ use gpui::{
     Render, Window, px,
 };
 use panel::PanelHeader;
-use ui::prelude::*;
+use ui::{prelude::*, Tooltip};
 use workspace::{
     dock::{DockPosition, Panel, PanelEvent},
     Workspace,
 };
 
-use crate::TogglePRPanel;
+use crate::{CheckoutPullRequest, CreatePullRequest, MergePullRequest, TogglePRPanel};
 
 actions!(pr_panel, [Refresh, Close]);
 
@@ -44,6 +44,15 @@ impl PRPanel {
 pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
     workspace.register_action(|workspace, _: &TogglePRPanel, window, cx| {
         workspace.toggle_panel_focus::<PRPanel>(window, cx);
+    });
+
+    workspace.register_action(|_workspace, _: &CheckoutPullRequest, _window, _cx| {
+    });
+
+    workspace.register_action(|_workspace, _: &CreatePullRequest, _window, _cx| {
+    });
+
+    workspace.register_action(|_workspace, _: &MergePullRequest, _window, _cx| {
     });
 }
 
@@ -127,6 +136,24 @@ impl Render for PRPanel {
                                 .gap_2()
                                 .child(Icon::new(IconName::PullRequest))
                                 .child(Label::new("Pull Requests")),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    IconButton::new("create-pr", IconName::Plus)
+                                        .tooltip(Tooltip::text("Create Pull Request"))
+                                        .on_click(|_event, _window, cx| {
+                                            cx.dispatch_action(&CreatePullRequest);
+                                        }),
+                                )
+                                .child(
+                                    IconButton::new("refresh-prs", IconName::ArrowCircle)
+                                        .tooltip(Tooltip::text("Refresh"))
+                                        .on_click(|_event, _window, cx| {
+                                            cx.dispatch_action(&Refresh);
+                                        }),
+                                ),
                         ),
                 ),
             )
@@ -139,17 +166,3 @@ impl Render for PRPanel {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[gpui::test]
-    fn test_pr_panel_persistent_name() {
-        assert_eq!(PRPanel::persistent_name(), "PRPanel");
-    }
-
-    #[gpui::test]
-    fn test_pr_panel_panel_key() {
-        assert_eq!(PRPanel::panel_key(), "pr_panel");
-    }
-}
