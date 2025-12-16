@@ -205,6 +205,7 @@ pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
         });
 
         if let Some(github_client) = github_client {
+            let project = workspace.project().clone();
             workspace.toggle_modal(window, cx, |window, cx| {
                 CreatePRModal::new(
                     "main".to_string(),
@@ -212,6 +213,7 @@ pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
                     github_client,
                     "owner".to_string(),
                     "repo".to_string(),
+                    project,
                     window,
                     cx,
                 )

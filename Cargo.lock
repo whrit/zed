@@ -12265,14 +12265,18 @@ name = "pr_ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "client",
  "collections",
  "editor",
  "futures 0.3.31",
+ "fuzzy",
  "github_client",
  "gpui",
  "language",
  "multi_buffer",
+ "node_runtime",
  "panel",
+ "picker",
  "project",
  "serde",
  "settings",

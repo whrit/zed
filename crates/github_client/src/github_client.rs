@@ -137,6 +137,78 @@ impl GitHubClient {
 
         builder
     }
+
+    pub(crate) async fn send_graphql_request<T>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let graphql_url = self.base_url.replace("api.github.com", "api.github.com/graphql");
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables
+        });
+        let body_json = serde_json::to_vec(&body)?;
+
+        let mut builder = Request::builder()
+            .method(http::Method::POST)
+            .uri(graphql_url)
+            .header("Accept", "application/vnd.github+json")
+            .header("Content-Type", "application/json")
+            .follow_redirects(RedirectPolicy::FollowAll);
+
+        if let Some(token) = &self.token {
+            builder = builder.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let request = builder.body(body_json.into())?;
+
+        let mut response = self
+            .http_client
+            .send(request)
+            .await
+            .context("error sending GraphQL request")?;
+
+        let mut response_body = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut response_body)
+            .await
+            .context("error reading GraphQL response body")?;
+
+        if response.status().is_client_error() || response.status().is_server_error() {
+            let text = String::from_utf8_lossy(&response_body);
+            bail!(
+                "GraphQL HTTP error {}: {}",
+                response.status().as_u16(),
+                text
+            );
+        }
+
+        let graphql_response: serde_json::Value = serde_json::from_slice(&response_body)
+            .map_err(|err| {
+                log::error!("Error deserializing GraphQL response: {err:?}");
+                log::error!("Response body: {:?}", String::from_utf8_lossy(&response_body));
+                anyhow::anyhow!("error deserializing GraphQL response: {err:?}")
+            })?;
+
+        if let Some(errors) = graphql_response.get("errors") {
+            bail!("GraphQL errors: {}", serde_json::to_string_pretty(errors)?);
+        }
+
+        let data = graphql_response
+            .get("data")
+            .context("GraphQL response missing 'data' field")?;
+
+        serde_json::from_value(data.clone()).map_err(|err| {
+            log::error!("Error deserializing GraphQL data: {err:?}");
+            log::error!("Data: {:?}", data);
+            anyhow::anyhow!("error deserializing GraphQL data: {err:?}")
+        })
+    }
 }
 
 #[cfg(test)]

@@ -3,11 +3,14 @@ use github_client::{CreatePRParams, GitHubClient};
 use gpui::*;
 use language::Buffer;
 use multi_buffer::MultiBuffer;
+use project::Project;
 use std::sync::Arc;
 use ui::{
     Button, ButtonSize, ButtonStyle, Checkbox, Label, LabelSize, ModalFooter, ModalHeader,
     ToggleState, prelude::*,
 };
+use util::ResultExt;
+use util::rel_path::RelPath;
 use workspace::{DismissDecision, ModalView};
 
 actions!(pr_create, [CreatePullRequest, SubmitPR, CancelCreate]);
@@ -24,6 +27,9 @@ pub struct CreatePRModal {
     repo: String,
     submitting: bool,
     error: Option<String>,
+    project: Entity<Project>,
+    template_loaded: bool,
+    title_loaded: bool,
 }
 
 impl EventEmitter<DismissEvent> for CreatePRModal {}
@@ -51,6 +57,7 @@ impl CreatePRModal {
         github_client: Arc<GitHubClient>,
         owner: String,
         repo: String,
+        project: Entity<Project>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -86,11 +93,11 @@ impl CreatePRModal {
         })
         .detach();
 
-        Self {
-            title_editor,
-            description_editor,
-            base_branch,
-            head_branch,
+        let modal = Self {
+            title_editor: title_editor.clone(),
+            description_editor: description_editor.clone(),
+            base_branch: base_branch.clone(),
+            head_branch: head_branch.clone(),
             is_draft: false,
             focus_handle,
             github_client,
@@ -98,7 +105,124 @@ impl CreatePRModal {
             repo,
             submitting: false,
             error: None,
+            project: project.clone(),
+            template_loaded: false,
+            title_loaded: false,
+        };
+
+        let title_editor_handle = title_editor.clone();
+        let description_editor_handle = description_editor.clone();
+
+        cx.background_spawn(async move {
+            let template_content = Self::load_pr_template(&project, &cx.to_async()).await;
+            let title_text = Self::extract_title_from_commits(&project, &head_branch, &base_branch, &cx.to_async()).await;
+
+            if let Some(template) = template_content {
+                description_editor_handle.update(&cx, |editor, cx| {
+                    editor.buffer().update(cx, |buffer, cx| {
+                        let len = buffer.len(cx);
+                        buffer.edit([(0..len, template.as_str())], None, cx);
+                    });
+                }).log_err();
+            }
+
+            if let Some(title) = title_text {
+                title_editor_handle.update(&cx, |editor, cx| {
+                    editor.buffer().update(cx, |buffer, cx| {
+                        let text = buffer.text();
+                        if text.trim().is_empty() {
+                            let len = buffer.len(cx);
+                            buffer.edit([(0..len, title.as_str())], None, cx);
+                        }
+                    });
+                }).log_err();
+            }
+        })
+        .detach();
+
+        modal
+    }
+
+    async fn load_pr_template(project: &Entity<Project>, cx: &AsyncApp) -> Option<String> {
+        const TEMPLATE_PATHS: &[&str] = &[
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".github/pull_request_template.md",
+            "PULL_REQUEST_TEMPLATE.md",
+        ];
+
+        let worktrees = project
+            .read_with(cx, |project, cx| {
+                project.worktrees(cx).collect::<Vec<_>>()
+            })
+            .ok()?;
+
+        for worktree_entity in worktrees {
+            for template_path in TEMPLATE_PATHS {
+                let path = RelPath::unix(template_path).ok()?;
+                let load_task = worktree_entity
+                    .update(cx, |worktree, cx| {
+                        worktree.load_file(&path, cx)
+                    })
+                    .ok()?;
+
+                if let Ok(loaded_file) = load_task.await {
+                    return Some(loaded_file.text);
+                }
+            }
         }
+
+        None
+    }
+
+    async fn extract_title_from_commits(
+        project: &Entity<Project>,
+        head_branch: &str,
+        _base_branch: &str,
+        cx: &AsyncApp,
+    ) -> Option<String> {
+        let git_store = project
+            .read_with(cx, |project, _cx| project.git_store().clone())
+            .ok()?;
+
+        let active_repo = git_store
+            .read_with(cx, |git_store, _cx| git_store.active_repository())
+            .ok()?;
+
+        if let Some(repo) = active_repo {
+            let branch = repo
+                .read_with(cx, |repo, _cx| repo.branch.clone())
+                .ok()?;
+
+            if let Some(branch_info) = branch {
+                if let Some(commit) = branch_info.most_recent_commit {
+                    return Some(commit.subject.to_string());
+                }
+            }
+        }
+
+        let sanitized_branch = head_branch
+            .trim_start_matches("refs/heads/")
+            .replace('-', " ")
+            .replace('_', " ");
+
+        let words: Vec<&str> = sanitized_branch.split_whitespace().collect();
+        if words.is_empty() {
+            return None;
+        }
+
+        let mut title = String::new();
+        for (i, word) in words.iter().enumerate() {
+            if i > 0 {
+                title.push(' ');
+            }
+            let mut chars = word.chars();
+            if let Some(first_char) = chars.next() {
+                title.push(first_char.to_uppercase().next().unwrap_or(first_char));
+                title.extend(chars);
+            }
+        }
+
+        Some(title)
     }
 
     fn title(&self, cx: &App) -> String {
@@ -147,6 +271,9 @@ impl CreatePRModal {
                     Some(description)
                 },
                 draft: is_draft,
+                assignees: None,
+                reviewers: None,
+                labels: None,
             };
 
             let result = github_client.create_pull_request(&owner, &repo, params).await;
@@ -317,6 +444,99 @@ impl Render for CreatePRModal {
                             })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use client::Client;
+    use node_runtime::FakeNodeRuntime;
+
+    #[gpui::test]
+    async fn test_extract_title_from_branch_name(cx: &mut TestAppContext) {
+        let project = cx.new(|cx| {
+            Project::local(
+                Client::default(),
+                FakeNodeRuntime::default(),
+                Default::default(),
+                cx,
+            )
+        });
+
+        let title = CreatePRModal::extract_title_from_commits(
+            &project,
+            "feature-add-new-button",
+            "main",
+            &cx.to_async(),
+        )
+        .await;
+
+        assert!(title.is_some());
+        assert_eq!(title.unwrap(), "Feature Add New Button");
+    }
+
+    #[gpui::test]
+    async fn test_extract_title_with_underscores(cx: &mut TestAppContext) {
+        let project = cx.new(|cx| {
+            Project::local(
+                Client::default(),
+                FakeNodeRuntime::default(),
+                Default::default(),
+                cx,
+            )
+        });
+
+        let title = CreatePRModal::extract_title_from_commits(
+            &project,
+            "fix_authentication_bug",
+            "main",
+            &cx.to_async(),
+        )
+        .await;
+
+        assert!(title.is_some());
+        assert_eq!(title.unwrap(), "Fix Authentication Bug");
+    }
+
+    #[gpui::test]
+    async fn test_extract_title_with_refs_prefix(cx: &mut TestAppContext) {
+        let project = cx.new(|cx| {
+            Project::local(
+                Client::default(),
+                FakeNodeRuntime::default(),
+                Default::default(),
+                cx,
+            )
+        });
+
+        let title = CreatePRModal::extract_title_from_commits(
+            &project,
+            "refs/heads/feature-new-api",
+            "main",
+            &cx.to_async(),
+        )
+        .await;
+
+        assert!(title.is_some());
+        assert_eq!(title.unwrap(), "Feature New Api");
+    }
+
+    #[gpui::test]
+    async fn test_load_pr_template_not_found(cx: &mut TestAppContext) {
+        let project = cx.new(|cx| {
+            Project::local(
+                Client::default(),
+                FakeNodeRuntime::default(),
+                Default::default(),
+                cx,
+            )
+        });
+
+        let template = CreatePRModal::load_pr_template(&project, &cx.to_async()).await;
+
+        assert!(template.is_none());
     }
 }
 

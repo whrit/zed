@@ -50,6 +50,8 @@ pub struct PullRequest {
     pub head_ref_data: RefData,
     #[serde(rename = "base")]
     pub base_ref_data: RefData,
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
 impl PullRequest {
@@ -89,6 +91,8 @@ pub struct PullRequestDetail {
     pub mergeable: Option<bool>,
     #[serde(default)]
     pub merged: bool,
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
 impl PullRequestDetail {
@@ -109,6 +113,12 @@ pub struct CreatePRParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub draft: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignees: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewers: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,8 +1,11 @@
 use crate::{
     CheckRunList, Commit, CreatePRParams, FileChange, GitHubClient, MergePRParams, MergeResult,
-    PRState, PullRequest, PullRequestDetail, RequestReviewersParams, ReviewRequest, UpdatePRParams,
+    PRState, PullRequest, PullRequestDetail, RefData, RequestReviewersParams, ReviewRequest,
+    UpdatePRParams,
 };
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 impl GitHubClient {
     pub async fn list_pull_requests(
@@ -161,6 +164,250 @@ impl GitHubClient {
 
         self.send_request(request).await
     }
+
+    pub async fn close_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+    ) -> Result<PullRequest> {
+        let params = UpdatePRParams {
+            title: None,
+            body: None,
+            state: Some(PRState::Closed),
+            base: None,
+        };
+        self.update_pull_request(owner, repo, number, params).await
+    }
+
+    pub async fn reopen_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+    ) -> Result<PullRequest> {
+        let params = UpdatePRParams {
+            title: None,
+            body: None,
+            state: Some(PRState::Open),
+            base: None,
+        };
+        self.update_pull_request(owner, repo, number, params).await
+    }
+
+    pub async fn convert_to_draft(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+    ) -> Result<PullRequest> {
+        let pr = self.get_pull_request(owner, repo, number).await?;
+        let node_id = pr.node_id.ok_or_else(|| {
+            anyhow::anyhow!("Pull request does not have a node_id, cannot convert to draft")
+        })?;
+
+        let query = r#"
+            mutation($pullRequestId: ID!) {
+                convertPullRequestToDraft(input: {pullRequestId: $pullRequestId}) {
+                    pullRequest {
+                        number
+                        title
+                        state
+                        isDraft
+                        url
+                        createdAt
+                        updatedAt
+                        author {
+                            login
+                        }
+                        headRef {
+                            name
+                        }
+                        baseRef {
+                            name
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "pullRequestId": node_id
+        });
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLResponse {
+            #[serde(rename = "convertPullRequestToDraft")]
+            convert_pull_request_to_draft: ConvertToDraftPayload,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ConvertToDraftPayload {
+            #[serde(rename = "pullRequest")]
+            pull_request: GraphQLPullRequest,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLPullRequest {
+            number: u32,
+            title: String,
+            state: String,
+            #[serde(rename = "isDraft")]
+            is_draft: bool,
+            url: String,
+            #[serde(rename = "createdAt")]
+            created_at: DateTime<Utc>,
+            #[serde(rename = "updatedAt")]
+            updated_at: DateTime<Utc>,
+            author: GraphQLUser,
+            #[serde(rename = "headRef")]
+            head_ref: GraphQLRef,
+            #[serde(rename = "baseRef")]
+            base_ref: GraphQLRef,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLUser {
+            login: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLRef {
+            name: String,
+        }
+
+        let response: GraphQLResponse = self.send_graphql_request(query, variables).await?;
+        let gql_pr = response.convert_pull_request_to_draft.pull_request;
+
+        Ok(PullRequest {
+            number: gql_pr.number,
+            title: gql_pr.title,
+            state: if gql_pr.state == "OPEN" {
+                PRState::Open
+            } else {
+                PRState::Closed
+            },
+            author: pr.author,
+            created_at: gql_pr.created_at,
+            updated_at: gql_pr.updated_at,
+            draft: gql_pr.is_draft,
+            url: gql_pr.url,
+            head_ref_data: RefData {
+                ref_name: gql_pr.head_ref.name,
+            },
+            base_ref_data: RefData {
+                ref_name: gql_pr.base_ref.name,
+            },
+            node_id: Some(node_id),
+        })
+    }
+
+    pub async fn mark_ready_for_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u32,
+    ) -> Result<PullRequest> {
+        let pr = self.get_pull_request(owner, repo, number).await?;
+        let node_id = pr.node_id.ok_or_else(|| {
+            anyhow::anyhow!("Pull request does not have a node_id, cannot mark ready for review")
+        })?;
+
+        let query = r#"
+            mutation($pullRequestId: ID!) {
+                markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+                    pullRequest {
+                        number
+                        title
+                        state
+                        isDraft
+                        url
+                        createdAt
+                        updatedAt
+                        author {
+                            login
+                        }
+                        headRef {
+                            name
+                        }
+                        baseRef {
+                            name
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "pullRequestId": node_id
+        });
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLResponse {
+            #[serde(rename = "markPullRequestReadyForReview")]
+            mark_pull_request_ready_for_review: MarkReadyPayload,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct MarkReadyPayload {
+            #[serde(rename = "pullRequest")]
+            pull_request: GraphQLPullRequest,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLPullRequest {
+            number: u32,
+            title: String,
+            state: String,
+            #[serde(rename = "isDraft")]
+            is_draft: bool,
+            url: String,
+            #[serde(rename = "createdAt")]
+            created_at: DateTime<Utc>,
+            #[serde(rename = "updatedAt")]
+            updated_at: DateTime<Utc>,
+            author: GraphQLUser,
+            #[serde(rename = "headRef")]
+            head_ref: GraphQLRef,
+            #[serde(rename = "baseRef")]
+            base_ref: GraphQLRef,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLUser {
+            login: String,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct GraphQLRef {
+            name: String,
+        }
+
+        let response: GraphQLResponse = self.send_graphql_request(query, variables).await?;
+        let gql_pr = response.mark_pull_request_ready_for_review.pull_request;
+
+        Ok(PullRequest {
+            number: gql_pr.number,
+            title: gql_pr.title,
+            state: if gql_pr.state == "OPEN" {
+                PRState::Open
+            } else {
+                PRState::Closed
+            },
+            author: pr.author,
+            created_at: gql_pr.created_at,
+            updated_at: gql_pr.updated_at,
+            draft: gql_pr.is_draft,
+            url: gql_pr.url,
+            head_ref_data: RefData {
+                ref_name: gql_pr.head_ref.name,
+            },
+            base_ref_data: RefData {
+                ref_name: gql_pr.base_ref.name,
+            },
+            node_id: Some(node_id),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -193,6 +440,7 @@ mod tests {
             base_ref_data: RefData {
                 ref_name: "main".to_string(),
             },
+            node_id: Some(format!("PR_test_node_id_{}", number)),
         }
     }
 
@@ -253,6 +501,7 @@ mod tests {
                 changed_files: 5,
                 mergeable: Some(true),
                 merged: false,
+                node_id: Some("PR_test_node_id_42".to_string()),
             };
 
             let body = serde_json::to_vec(&pr_detail).expect("serialize pr_detail");
@@ -293,6 +542,9 @@ mod tests {
             base: "main".to_string(),
             body: Some("PR body".to_string()),
             draft: false,
+            assignees: None,
+            reviewers: None,
+            labels: None,
         };
 
         let result = client.create_pull_request("owner", "repo", params).await;
@@ -579,5 +831,53 @@ mod tests {
         let checks = result.expect("get checks");
         assert_eq!(checks.total_count, 2);
         assert_eq!(checks.check_runs.len(), 2);
+    }
+
+    #[gpui::test]
+    async fn test_close_pull_request() {
+        let http_client = FakeHttpClient::create(|request| async move {
+            assert_eq!(request.method(), http::Method::PATCH);
+            assert!(request.uri().path().contains("/repos/owner/repo/pulls/42"));
+
+            let mut pr = make_test_pr(42, "PR to close");
+            pr.state = PRState::Closed;
+            let body = serde_json::to_vec(&pr).expect("serialize pr");
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .expect("build response"))
+        });
+
+        let client = GitHubClient::with_token(http_client, "test_token".to_string());
+        let result = client.close_pull_request("owner", "repo", 42).await;
+
+        assert!(result.is_ok());
+        let pr = result.expect("get pr");
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.state, PRState::Closed);
+    }
+
+    #[gpui::test]
+    async fn test_reopen_pull_request() {
+        let http_client = FakeHttpClient::create(|request| async move {
+            assert_eq!(request.method(), http::Method::PATCH);
+            assert!(request.uri().path().contains("/repos/owner/repo/pulls/42"));
+
+            let mut pr = make_test_pr(42, "PR to reopen");
+            pr.state = PRState::Open;
+            let body = serde_json::to_vec(&pr).expect("serialize pr");
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .expect("build response"))
+        });
+
+        let client = GitHubClient::with_token(http_client, "test_token".to_string());
+        let result = client.reopen_pull_request("owner", "repo", 42).await;
+
+        assert!(result.is_ok());
+        let pr = result.expect("get pr");
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.state, PRState::Open);
     }
 }
