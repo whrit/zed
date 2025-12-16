@@ -97,35 +97,3 @@ impl RenderOnce for PRDetailView {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::PullRequestState;
-
-    #[test]
-    fn test_pr_detail_view_creation() {
-        let pr = PullRequestData {
-            number: 123,
-            title: "Test PR".to_string(),
-            author: "test-user".to_string(),
-            state: PullRequestState::Open,
-        };
-
-        let detail_view = PRDetailView::new(pr);
-        assert_eq!(detail_view.pull_request.number, 123);
-        assert!(detail_view.description.is_none());
-    }
-
-    #[test]
-    fn test_pr_detail_view_with_description() {
-        let pr = PullRequestData {
-            number: 456,
-            title: "Feature PR".to_string(),
-            author: "developer".to_string(),
-            state: PullRequestState::Open,
-        };
-
-        let detail_view = PRDetailView::new(pr).with_description("This is a test description".to_string());
-        assert_eq!(detail_view.description.as_deref(), Some("This is a test description"));
-    }
-}

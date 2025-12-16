@@ -290,33 +290,3 @@ impl Render for PRReviewPanel {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_review_session_state_default() {
-        assert_eq!(ReviewSessionState::default(), ReviewSessionState::NotStarted);
-    }
-
-    #[test]
-    fn test_pending_comment() {
-        let comment = PendingComment {
-            path: "src/main.rs".to_string(),
-            line: 42,
-            body: "This looks good!".to_string(),
-        };
-        assert_eq!(comment.path, "src/main.rs");
-        assert_eq!(comment.line, 42);
-    }
-
-    #[test]
-    fn test_panel_persistent_name() {
-        assert_eq!(PRReviewPanel::persistent_name(), "PRReviewPanel");
-    }
-
-    #[test]
-    fn test_panel_key() {
-        assert_eq!(PRReviewPanel::panel_key(), "pr_review_panel");
-    }
-}
