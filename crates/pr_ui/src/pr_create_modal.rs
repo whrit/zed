@@ -113,28 +113,32 @@ impl CreatePRModal {
         let title_editor_handle = title_editor.clone();
         let description_editor_handle = description_editor.clone();
 
-        cx.background_spawn(async move {
-            let template_content = Self::load_pr_template(&project, &cx.to_async()).await;
-            let title_text = Self::extract_title_from_commits(&project, &head_branch, &base_branch, &cx.to_async()).await;
+        cx.spawn(async move |_handle, cx| {
+            let template_content = Self::load_pr_template(&project, cx).await;
+            let title_text = Self::extract_title_from_commits(&project, &head_branch, &base_branch, cx).await;
 
             if let Some(template) = template_content {
-                description_editor_handle.update(&cx, |editor, cx| {
-                    editor.buffer().update(cx, |buffer, cx| {
-                        let len = buffer.len(cx);
-                        buffer.edit([(0..len, template.as_str())], None, cx);
-                    });
+                let template: Arc<str> = template.into();
+                description_editor_handle.update(cx, |editor, cx| {
+                    if let Some(buffer) = editor.buffer().read(cx).as_singleton() {
+                        buffer.update(cx, |buffer, cx| {
+                            buffer.set_text(template, cx);
+                        });
+                    }
                 }).log_err();
             }
 
             if let Some(title) = title_text {
-                title_editor_handle.update(&cx, |editor, cx| {
-                    editor.buffer().update(cx, |buffer, cx| {
-                        let text = buffer.text();
-                        if text.trim().is_empty() {
-                            let len = buffer.len(cx);
-                            buffer.edit([(0..len, title.as_str())], None, cx);
+                let title: Arc<str> = title.into();
+                title_editor_handle.update(cx, |editor, cx| {
+                    let is_empty = editor.text(cx).trim().is_empty();
+                    if is_empty {
+                        if let Some(buffer) = editor.buffer().read(cx).as_singleton() {
+                            buffer.update(cx, |buffer, cx| {
+                                buffer.set_text(title, cx);
+                            });
                         }
-                    });
+                    }
                 }).log_err();
             }
         })
@@ -143,7 +147,7 @@ impl CreatePRModal {
         modal
     }
 
-    async fn load_pr_template(project: &Entity<Project>, cx: &AsyncApp) -> Option<String> {
+    async fn load_pr_template(project: &Entity<Project>, cx: &mut AsyncApp) -> Option<String> {
         const TEMPLATE_PATHS: &[&str] = &[
             ".github/PULL_REQUEST_TEMPLATE.md",
             ".github/pull_request_template.md",
@@ -178,7 +182,7 @@ impl CreatePRModal {
         project: &Entity<Project>,
         head_branch: &str,
         _base_branch: &str,
-        cx: &AsyncApp,
+        cx: &mut AsyncApp,
     ) -> Option<String> {
         let git_store = project
             .read_with(cx, |project, _cx| project.git_store().clone())

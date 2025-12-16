@@ -8,6 +8,7 @@ use crate::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{Context, DismissEvent, Entity, Focusable as _, Pixels, Point, Subscription, Window};
+use zed_actions::pr::{AddPRComment, PRCommentAvailability};
 use project::DisableAiSettings;
 use settings::Settings;
 use std::ops::Range;
@@ -217,6 +218,11 @@ pub fn deploy_context_menu(
         let evaluate_selection = window.is_action_available(&EvaluateSelectedText, cx);
         let run_to_cursor = window.is_action_available(&RunToCursor, cx);
         let disable_ai = DisableAiSettings::get_global(cx).disable_ai;
+        let can_add_pr_comment = editor
+            .target_file(cx)
+            .map(|file| file.abs_path(cx))
+            .and_then(|path| path.to_str().map(|s| s.to_owned()))
+            .is_some_and(|path| PRCommentAvailability::can_add_comment_at(&path, cx));
 
         ui::ContextMenu::build(window, cx, |menu, _window, _cx| {
             let builder = menu
@@ -252,6 +258,9 @@ pub fn deploy_context_menu(
                         quick_launch: false,
                     }),
                 )
+                .when(can_add_pr_comment, |builder| {
+                    builder.action("Add PR Comment", Box::new(AddPRComment))
+                })
                 .when(!disable_ai && has_selections, |this| {
                     this.action("Add to Agent Thread", Box::new(AddSelectionToThread))
                 })

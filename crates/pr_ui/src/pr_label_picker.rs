@@ -261,9 +261,7 @@ impl PickerDelegate for LabelPickerDelegate {
                                 .h(px(12.0))
                                 .rounded(px(6.0))
                                 .bg(gpui::rgb(
-                                    r as f32 / 255.0,
-                                    g as f32 / 255.0,
-                                    b as f32 / 255.0,
+                                    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32),
                                 )),
                         )
                         .child(

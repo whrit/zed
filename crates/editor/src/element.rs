@@ -63,6 +63,7 @@ use multi_buffer::{
 };
 
 use edit_prediction_types::EditPredictionGranularity;
+use crate::pr_comment_state::get_pr_comment_state;
 use project::{
     Entry, ProjectPath,
     debugger::breakpoint_store::{Breakpoint, BreakpointSessionState},
@@ -6341,6 +6342,80 @@ impl EditorElement {
         });
     }
 
+    fn paint_gutter_pr_comments(layout: &EditorLayout, window: &mut Window, cx: &App) {
+        let pr_state = get_pr_comment_state(cx);
+        if !pr_state.has_active_pr() {
+            return;
+        }
+
+        let line_height = layout.position_map.line_height;
+        let snapshot = &layout.position_map.snapshot;
+        let scroll_pixel_position = layout.position_map.scroll_pixel_position;
+        let gutter_bounds = layout.gutter_hitbox.bounds;
+
+        let indicator_size = (0.5 * line_height).floor();
+        let indicator_x = gutter_bounds.right() - indicator_size - px(4.);
+
+        window.paint_layer(gutter_bounds, |window| {
+            let start_row = layout.visible_display_row_range.start;
+            let mut row_infos = snapshot.row_infos(start_row);
+
+            for ix in 0..layout.position_map.line_layouts.len() {
+                let display_row = DisplayRow(start_row.0 + ix as u32);
+                let Some(row_info) = row_infos.next() else {
+                    break;
+                };
+
+                let Some(buffer_id) = row_info.buffer_id else {
+                    continue;
+                };
+
+                let Some(buffer_row) = row_info.buffer_row else {
+                    continue;
+                };
+
+                let buffer_snapshot = snapshot.buffer_snapshot();
+                let Some(buffer) = buffer_snapshot
+                    .excerpts()
+                    .find(|(_, buf, _)| buf.remote_id() == buffer_id)
+                    .map(|(_, buf, _)| buf)
+                else {
+                    continue;
+                };
+
+                let Some(file) = buffer.file() else {
+                    continue;
+                };
+
+                let file_path = file.path().as_ref().as_unix_str();
+
+                if !pr_state.has_comments_for_line(&file_path, buffer_row + 1) {
+                    continue;
+                }
+
+                let y_offset = Pixels::from(
+                    display_row.0 as f64 * ScrollPixelOffset::from(line_height)
+                        - scroll_pixel_position.y,
+                );
+
+                let indicator_origin = point(indicator_x, gutter_bounds.top() + y_offset + (line_height - indicator_size) / 2.);
+                let indicator_bounds = Bounds::new(indicator_origin, size(indicator_size, indicator_size));
+
+                let comment_color = cx.theme().colors().text_accent;
+                let corner_radii = Corners::all(indicator_size / 2.);
+
+                window.paint_quad(quad(
+                    indicator_bounds,
+                    corner_radii,
+                    comment_color,
+                    Edges::default(),
+                    transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+        });
+    }
+
     fn gutter_strip_width(line_height: Pixels) -> Pixels {
         (0.275 * line_height).floor()
     }
@@ -6483,6 +6558,8 @@ impl EditorElement {
         if show_git_gutter {
             Self::paint_gutter_diff_hunks(layout, window, cx)
         }
+
+        Self::paint_gutter_pr_comments(layout, window, cx);
 
         let highlight_width = 0.275 * layout.position_map.line_height;
         let highlight_corner_radii = Corners::all(0.05 * layout.position_map.line_height);

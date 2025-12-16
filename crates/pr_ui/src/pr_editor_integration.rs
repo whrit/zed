@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use gpui::{actions, App};
+use editor::pr_comment_state::{PRCommentData, update_pr_comment_state};
+use gpui::App;
 
 use crate::inline_comment::InlineCommentData;
-
-actions!(pr_editor_integration, [AddPRComment]);
+pub use zed_actions::pr::AddPRComment;
 
 /// Tracks which editor files are part of an active PR review
 /// Provides comment data and actions for editor integration
@@ -119,18 +119,56 @@ impl PREditorIntegration {
         comments: HashMap<String, Vec<InlineCommentData>>,
         cx: &mut App,
     ) {
+        let files_set: HashSet<String> = files.iter().cloned().collect();
+        zed_actions::pr::PRCommentAvailability::set_active_pr_files(files_set, cx);
+
+        let editor_comments: HashMap<String, Vec<PRCommentData>> = comments
+            .iter()
+            .map(|(path, inline_comments)| {
+                let converted: Vec<PRCommentData> = inline_comments
+                    .iter()
+                    .map(|c| PRCommentData {
+                        path: c.path.clone(),
+                        line: c.line,
+                        author: c.author.clone(),
+                        body: c.body.clone(),
+                    })
+                    .collect();
+                (path.clone(), converted)
+            })
+            .collect();
+
+        update_pr_comment_state(cx, |state| {
+            state.set_active_pr(pr_number, files.clone(), editor_comments);
+        });
+
         update_pr_editor_state(cx, |state| {
             state.set_active_pr(pr_number, files, comments);
         });
     }
 
     pub fn add_comment(comment: InlineCommentData, cx: &mut App) {
+        let editor_comment = PRCommentData {
+            path: comment.path.clone(),
+            line: comment.line,
+            author: comment.author.clone(),
+            body: comment.body.clone(),
+        };
+
+        update_pr_comment_state(cx, |state| {
+            state.add_comment(editor_comment);
+        });
+
         update_pr_editor_state(cx, |state| {
             state.add_comment(comment);
         });
     }
 
     pub fn clear_active_pr(cx: &mut App) {
+        zed_actions::pr::PRCommentAvailability::clear(cx);
+        update_pr_comment_state(cx, |state| {
+            state.clear_active_pr();
+        });
         update_pr_editor_state(cx, |state| {
             state.clear_active_pr();
         });

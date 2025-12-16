@@ -567,6 +567,44 @@ pub mod vim {
     );
 }
 
+pub mod pr {
+    use gpui::{App, Global, actions};
+    use std::collections::HashSet;
+
+    actions!(
+        pr,
+        [
+            /// Adds a comment to the current line in a pull request review.
+            AddPRComment
+        ]
+    );
+
+    #[derive(Default)]
+    pub struct PRCommentAvailability {
+        pub active_pr_files: HashSet<String>,
+    }
+
+    impl Global for PRCommentAvailability {}
+
+    impl PRCommentAvailability {
+        pub fn can_add_comment_at(path: &str, cx: &App) -> bool {
+            cx.try_global::<PRCommentAvailability>()
+                .map(|state| {
+                    state.active_pr_files.iter().any(|f| f == path || path.ends_with(f))
+                })
+                .unwrap_or(false)
+        }
+
+        pub fn set_active_pr_files(files: HashSet<String>, cx: &mut App) {
+            cx.set_global(PRCommentAvailability { active_pr_files: files });
+        }
+
+        pub fn clear(cx: &mut App) {
+            cx.set_global(PRCommentAvailability::default());
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WslConnectionOptions {
     pub distro_name: String,

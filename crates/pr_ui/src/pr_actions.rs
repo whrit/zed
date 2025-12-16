@@ -1,4 +1,4 @@
-use gpui::{prelude::*, App, Entity, EventEmitter, IntoElement, RenderOnce, Window};
+use gpui::{prelude::*, App, Context, Entity, EventEmitter, IntoElement, RenderOnce, Window};
 use ui::{prelude::*, Button, ButtonStyle};
 
 use crate::PullRequestState;
@@ -72,22 +72,20 @@ pub struct PRActions {
 }
 
 impl PRActions {
-    pub fn new(state: PullRequestState, draft: bool) -> Entity<Self> {
-        |cx: &mut App| {
-            cx.new(|_cx| Self {
-                state,
-                draft,
-                loading: false,
-            })
-        }
+    pub fn new(state: PullRequestState, draft: bool, cx: &mut App) -> Entity<Self> {
+        cx.new(|_cx| Self {
+            state,
+            draft,
+            loading: false,
+        })
     }
 
-    pub fn set_loading(&mut self, loading: bool, cx: &mut App) {
+    pub fn set_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
         self.loading = loading;
         cx.notify();
     }
 
-    pub fn update_state(&mut self, state: PullRequestState, draft: bool, cx: &mut App) {
+    pub fn update_state(&mut self, state: PullRequestState, draft: bool, cx: &mut Context<Self>) {
         self.state = state;
         self.draft = draft;
         self.loading = false;
