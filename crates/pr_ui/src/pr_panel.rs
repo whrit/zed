@@ -1,6 +1,6 @@
 use gpui::{
-    actions, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Pixels,
-    Render, Task, Window, px,
+    actions, uniform_list, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, Pixels, Render, Task, UniformListScrollHandle, Window, px,
 };
 use panel::PanelHeader;
 use ui::{prelude::*, Tooltip};
@@ -24,6 +24,7 @@ pub struct PRPanel {
     error: Option<String>,
     _load_task: Option<Task<()>>,
     selected_index: Option<usize>,
+    scroll_handle: UniformListScrollHandle,
 }
 
 impl PRPanel {
@@ -37,6 +38,7 @@ impl PRPanel {
             error: None,
             _load_task: None,
             selected_index: None,
+            scroll_handle: UniformListScrollHandle::new(),
         }
     }
 
@@ -273,23 +275,39 @@ impl Render for PRPanel {
                 .p_4()
                 .child(Label::new("No pull requests to display").color(Color::Muted))
         } else {
+            let pr_count = self.pull_requests.len();
+
             v_flex()
                 .flex_1()
-                .children(
-                    self.pull_requests.iter().enumerate().map(|(index, pr)| {
-                        let pr_clone = pr.clone();
-                        let is_selected = self.selected_index == Some(index);
-                        div()
-                            .id(("pr-item", pr.number))
-                            .when(is_selected, |this| {
-                                this.bg(cx.theme().colors().element_selected)
-                            })
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.selected_index = Some(index);
-                                cx.notify();
-                            }))
-                            .child(PRListItem::new(pr_clone))
-                    })
+                .child(
+                    uniform_list(
+                        "pr-list",
+                        pr_count,
+                        cx.processor(|this: &mut PRPanel, range: std::ops::Range<usize>, _window: &mut gpui::Window, cx: &mut gpui::Context<PRPanel>| {
+                            let mut items = Vec::with_capacity(range.end - range.start);
+                            for index in range {
+                                if let Some(pr) = this.pull_requests.get(index) {
+                                    let pr_clone = pr.clone();
+                                    let is_selected = this.selected_index == Some(index);
+                                    let item = div()
+                                        .id(("pr-item", pr.number))
+                                        .when(is_selected, |div| {
+                                            div.bg(cx.theme().colors().element_selected)
+                                        })
+                                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                                            this.selected_index = Some(index);
+                                            cx.notify();
+                                        }))
+                                        .child(PRListItem::new(pr_clone));
+                                    items.push(item);
+                                }
+                            }
+                            items
+                        }),
+                    )
+                    .flex_1()
+                    .size_full()
+                    .track_scroll(&self.scroll_handle),
                 )
         };
 

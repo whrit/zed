@@ -340,30 +340,25 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                let params = modal.merge_params(cx);
+        window.update(cx, |modal, window, cx| {
+            let params = modal.merge_params(cx);
 
-                assert_eq!(params.commit_title, None);
-                assert_eq!(params.commit_message, None);
-                assert_eq!(params.sha, None);
-                assert_eq!(params.merge_method, Some(MergeMethod::Merge));
-            });
+            assert_eq!(params.commit_title, None);
+            assert_eq!(params.commit_message, None);
+            assert_eq!(params.sha, None);
+            assert_eq!(params.merge_method, Some(MergeMethod::Merge));
         });
     }
 
@@ -377,37 +372,32 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                modal.commit_title_editor.update(cx, |editor, cx| {
-                    editor.set_text("Custom title", window, cx);
-                });
-                modal.commit_message_editor.update(cx, |editor, cx| {
-                    editor.set_text("Custom message", window, cx);
-                });
-                modal.set_merge_method(MergeMethod::Squash, cx);
-
-                let params = modal.merge_params(cx);
-
-                assert_eq!(params.commit_title, Some("Custom title".to_string()));
-                assert_eq!(params.commit_message, Some("Custom message".to_string()));
-                assert_eq!(params.merge_method, Some(MergeMethod::Squash));
+        window.update(cx, |modal, window, cx| {
+            modal.commit_title_editor.update(cx, |editor, cx| {
+                editor.set_text("Custom title", window, cx);
             });
+            modal.commit_message_editor.update(cx, |editor, cx| {
+                editor.set_text("Custom message", window, cx);
+            });
+            modal.set_merge_method(MergeMethod::Squash, cx);
+
+            let params = modal.merge_params(cx);
+
+            assert_eq!(params.commit_title, Some("Custom title".to_string()));
+            assert_eq!(params.commit_message, Some("Custom message".to_string()));
+            assert_eq!(params.merge_method, Some(MergeMethod::Squash));
         });
     }
 
@@ -427,32 +417,27 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                assert!(!modal.merging);
-                modal.confirm(&ConfirmMerge, window, cx);
-                assert!(modal.merging);
-            });
+        window.update(cx, |modal, window, cx| {
+            assert!(!modal.merging);
+            modal.confirm(&ConfirmMerge, window, cx);
+            assert!(modal.merging);
         });
 
         cx.background_executor.run_until_parked();
 
-        modal.read_with(cx, |modal, _cx| {
+        window.read_with(cx, |modal, _cx| {
             assert!(!modal.merging);
             assert!(modal.error.is_none());
         });
@@ -468,30 +453,25 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                modal.confirm(&ConfirmMerge, window, cx);
-            });
+        window.update(cx, |modal, window, cx| {
+            modal.confirm(&ConfirmMerge, window, cx);
         });
 
         cx.background_executor.run_until_parked();
 
-        modal.read_with(cx, |modal, _cx| {
+        window.read_with(cx, |modal, _cx| {
             assert!(!modal.merging);
             assert!(modal.error.is_some());
         });
@@ -513,29 +493,24 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                modal.confirm(&ConfirmMerge, window, cx);
-                assert!(modal.merging);
+        window.update(cx, |modal, window, cx| {
+            modal.confirm(&ConfirmMerge, window, cx);
+            assert!(modal.merging);
 
-                modal.confirm(&ConfirmMerge, window, cx);
-                assert!(modal.merging);
-            });
+            modal.confirm(&ConfirmMerge, window, cx);
+            assert!(modal.merging);
         });
     }
 
@@ -549,31 +524,26 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                assert_eq!(modal.merge_method, MergeMethod::Merge);
+        window.update(cx, |modal, window, cx| {
+            assert_eq!(modal.merge_method, MergeMethod::Merge);
 
-                modal.set_merge_method(MergeMethod::Squash, cx);
-                assert_eq!(modal.merge_method, MergeMethod::Squash);
+            modal.set_merge_method(MergeMethod::Squash, cx);
+            assert_eq!(modal.merge_method, MergeMethod::Squash);
 
-                modal.set_merge_method(MergeMethod::Rebase, cx);
-                assert_eq!(modal.merge_method, MergeMethod::Rebase);
-            });
+            modal.set_merge_method(MergeMethod::Rebase, cx);
+            assert_eq!(modal.merge_method, MergeMethod::Rebase);
         });
     }
 
@@ -587,32 +557,27 @@ mod tests {
         });
         let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
 
-        let modal = cx.new(|cx| {
-            cx.new_window(|window, cx| {
-                MergePRModal::new(
-                    42,
-                    "Test PR".to_string(),
-                    github_client.clone(),
-                    "owner".to_string(),
-                    "repo".to_string(),
-                    window,
-                    cx,
-                )
-            })
+        let window = cx.new_window(|window, cx| {
+            MergePRModal::new(
+                42,
+                "Test PR".to_string(),
+                github_client.clone(),
+                "owner".to_string(),
+                "repo".to_string(),
+                window,
+                cx,
+            )
         });
 
-        modal.update(cx, |modal, cx| {
-            let window = modal.entity_id();
-            cx.update_window(window, |modal, window, cx| {
-                modal.set_merge_method(MergeMethod::Merge, cx);
-                assert!(!modal.should_show_commit_editors());
+        window.update(cx, |modal, window, cx| {
+            modal.set_merge_method(MergeMethod::Merge, cx);
+            assert!(!modal.should_show_commit_editors());
 
-                modal.set_merge_method(MergeMethod::Squash, cx);
-                assert!(modal.should_show_commit_editors());
+            modal.set_merge_method(MergeMethod::Squash, cx);
+            assert!(modal.should_show_commit_editors());
 
-                modal.set_merge_method(MergeMethod::Rebase, cx);
-                assert!(!modal.should_show_commit_editors());
-            });
+            modal.set_merge_method(MergeMethod::Rebase, cx);
+            assert!(!modal.should_show_commit_editors());
         });
     }
 }
