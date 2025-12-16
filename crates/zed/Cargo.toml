@@ -66,7 +66,9 @@ futures.workspace = true
 git.workspace = true
 git_hosting_providers.workspace = true
 git_ui.workspace = true
+github_client.workspace = true
 go_to_line.workspace = true
+pr_ui.workspace = true
 system_specs.workspace = true
 gpui = { workspace = true, features = [
     "wayland",

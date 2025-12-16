@@ -323,9 +323,8 @@ pub struct UpdatePRParams {
     pub base: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum MergeMethod {
     #[default]
     Merge,

@@ -1,19 +1,24 @@
 use crate::{DeviceCodeResponse, DeviceTokenResponse, GitHubClient};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 const GITHUB_OAUTH_URL: &str = "https://github.com/login";
 
 impl GitHubClient {
     pub async fn request_device_code(&self, client_id: &str) -> Result<DeviceCodeResponse> {
         let url = format!("{}/device/code", GITHUB_OAUTH_URL);
-        let body = format!("client_id={}&scope=repo", client_id);
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", client_id)
+            .append_pair("scope", "repo")
+            .finish();
 
         let request = http::Request::post(&url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into_bytes().into())?;
 
-        self.send_request(request).await
+        self.send_request(request)
+            .await
+            .context("failed to request device code")
     }
 
     pub async fn poll_device_token(
@@ -22,17 +27,20 @@ impl GitHubClient {
         device_code: &str,
     ) -> Result<DeviceTokenResponse> {
         let url = format!("{}/oauth/access_token", GITHUB_OAUTH_URL);
-        let body = format!(
-            "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
-            client_id, device_code
-        );
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", client_id)
+            .append_pair("device_code", device_code)
+            .append_pair("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+            .finish();
 
         let request = http::Request::post(&url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into_bytes().into())?;
 
-        self.send_request(request).await
+        self.send_request(request)
+            .await
+            .context("failed to poll device token")
     }
 
     pub fn device_code_info(response: &DeviceCodeResponse) -> DeviceCodeInfo {
