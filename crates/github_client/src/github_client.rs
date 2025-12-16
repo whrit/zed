@@ -92,6 +92,32 @@ impl GitHubClient {
         })
     }
 
+    pub(crate) async fn send_request_no_content(&self, request: Request<AsyncBody>) -> Result<()> {
+        let mut response = self
+            .http_client
+            .send(request)
+            .await
+            .context("error sending request")?;
+
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut body)
+            .await
+            .context("error reading response body")?;
+
+        if response.status().is_client_error() || response.status().is_server_error() {
+            let text = String::from_utf8_lossy(&body);
+            bail!(
+                "HTTP error {}: {}",
+                response.status().as_u16(),
+                text
+            );
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn build_request(&self, method: http::Method, path: &str) -> http::request::Builder {
         let url = format!("{}{}", self.base_url, path);
         let mut builder = Request::builder()

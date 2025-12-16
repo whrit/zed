@@ -463,3 +463,62 @@ pub struct StatusContext {
     pub description: Option<String>,
     pub target_url: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRequestReviewComment {
+    pub id: u64,
+    #[serde(rename = "user")]
+    pub author: User,
+    pub body: String,
+    pub path: String,
+    #[serde(default)]
+    pub line: Option<u32>,
+    #[serde(default)]
+    pub original_line: Option<u32>,
+    #[serde(default)]
+    pub start_line: Option<u32>,
+    #[serde(default)]
+    pub start_side: Option<DiffSide>,
+    #[serde(default)]
+    pub side: Option<DiffSide>,
+    #[serde(default)]
+    pub diff_hunk: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub in_reply_to_id: Option<u64>,
+    #[serde(rename = "html_url")]
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DiffSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreatePullRequestReviewCommentParams {
+    pub body: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side: Option<DiffSide>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_side: Option<DiffSide>,
+    pub commit_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CreateReviewCommentReplyParams {
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateReviewCommentParams {
+    pub body: String,
+}
