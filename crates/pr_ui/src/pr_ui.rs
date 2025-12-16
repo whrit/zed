@@ -32,8 +32,8 @@ pub use pr_review_modal::{
     CancelReview, PendingReviewSummary, ReviewAction, SubmitReview, SubmitReviewModal,
 };
 pub use pr_review_panel::{
-    DiscardReview, PRReviewPanel, PendingComment, ReviewSessionState, StartReview,
-    ToggleReviewPanel,
+    DiscardReview, PRCommentStore, PRReviewPanel, PRReviewPanelEvent, PendingComment,
+    ReviewSessionState, StartReview, ToggleReviewPanel,
 };
 pub use pr_status_indicator::{PRDisplayState, PRStatusIndicator};
 

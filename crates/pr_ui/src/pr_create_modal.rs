@@ -1,7 +1,9 @@
 use editor::{Editor, EditorElement, EditorMode};
+use github_client::{CreatePRParams, GitHubClient};
 use gpui::*;
 use language::Buffer;
 use multi_buffer::MultiBuffer;
+use std::sync::Arc;
 use ui::{
     Button, ButtonSize, ButtonStyle, Checkbox, Label, LabelSize, ModalFooter, ModalHeader,
     ToggleState, prelude::*,
@@ -17,6 +19,11 @@ pub struct CreatePRModal {
     head_branch: String,
     is_draft: bool,
     focus_handle: FocusHandle,
+    github_client: Arc<GitHubClient>,
+    owner: String,
+    repo: String,
+    submitting: bool,
+    error: Option<String>,
 }
 
 impl EventEmitter<DismissEvent> for CreatePRModal {}
@@ -41,6 +48,9 @@ impl CreatePRModal {
     pub fn new(
         base_branch: String,
         head_branch: String,
+        github_client: Arc<GitHubClient>,
+        owner: String,
+        repo: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -83,6 +93,11 @@ impl CreatePRModal {
             head_branch,
             is_draft: false,
             focus_handle,
+            github_client,
+            owner,
+            repo,
+            submitting: false,
+            error: None,
         }
     }
 
@@ -90,7 +105,6 @@ impl CreatePRModal {
         self.title_editor.read(cx).text(cx)
     }
 
-    #[allow(dead_code)] // Will be used when integrating with GitHub API
     fn description(&self, cx: &App) -> String {
         self.description_editor.read(cx).text(cx)
     }
@@ -105,10 +119,51 @@ impl CreatePRModal {
     }
 
     fn submit(&mut self, _action: &SubmitPR, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_submit(cx) {
+        if self.submitting || !self.can_submit(cx) {
             return;
         }
-        cx.emit(DismissEvent);
+
+        let title = self.title(cx);
+        let description = self.description(cx);
+        let is_draft = self.is_draft;
+        let base_branch = self.base_branch.clone();
+        let head_branch = self.head_branch.clone();
+        let github_client = self.github_client.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+
+        self.submitting = true;
+        self.error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let params = CreatePRParams {
+                title,
+                head: head_branch,
+                base: base_branch,
+                body: if description.is_empty() {
+                    None
+                } else {
+                    Some(description)
+                },
+                draft: is_draft,
+            };
+
+            let result = github_client.create_pull_request(&owner, &repo, params).await;
+
+            this.update(cx, |this, cx| {
+                this.submitting = false;
+                match result {
+                    Ok(_pr) => cx.emit(DismissEvent),
+                    Err(e) => {
+                        this.error = Some(e.to_string());
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn cancel(&mut self, _action: &CancelCreate, _window: &mut Window, cx: &mut Context<Self>) {
@@ -118,7 +173,7 @@ impl CreatePRModal {
 
 impl Render for CreatePRModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let can_submit = self.can_submit(cx);
+        let can_submit = self.can_submit(cx) && !self.submitting;
 
         v_flex()
             .id("pr-create-modal")
@@ -230,7 +285,16 @@ impl Render for CreatePRModal {
                                     this.toggle_draft(window, cx);
                                 })),
                             ),
-                    ),
+                    )
+                    .when_some(self.error.clone(), |this, error| {
+                        this.child(
+                            div()
+                                .p_2()
+                                .bg(gpui::red())
+                                .rounded_md()
+                                .child(Label::new(format!("Error: {}", error)).size(LabelSize::Small).color(Color::Default)),
+                        )
+                    }),
             )
             .child(
                 ModalFooter::new()
@@ -238,12 +302,13 @@ impl Render for CreatePRModal {
                         Button::new("cancel", "Cancel")
                             .style(ButtonStyle::Subtle)
                             .size(ButtonSize::Default)
+                            .disabled(self.submitting)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.cancel(&CancelCreate, window, cx);
                             })),
                     )
                     .end_slot(
-                        Button::new("submit", "Create Pull Request")
+                        Button::new("submit", if self.submitting { "Creating..." } else { "Create Pull Request" })
                             .style(ButtonStyle::Filled)
                             .size(ButtonSize::Default)
                             .disabled(!can_submit)

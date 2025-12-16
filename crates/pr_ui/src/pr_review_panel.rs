@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::{
     actions, uniform_list, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, Pixels, Render, RenderOnce, UniformListScrollHandle, Window, px,
@@ -9,6 +11,8 @@ use workspace::{
     Workspace,
 };
 
+use crate::inline_comment::InlineCommentData;
+
 actions!(pr_review_panel, [ToggleReviewPanel, StartReview, SubmitReview, DiscardReview]);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -17,6 +21,12 @@ pub enum ReviewSessionState {
     NotStarted,
     InProgress,
     Submitted,
+}
+
+#[derive(Debug, Clone)]
+pub enum PRReviewPanelEvent {
+    CommentLineClicked { path: String, line: u32 },
+    CommentAdded(InlineCommentData),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +82,7 @@ pub struct PRReviewPanel {
     scroll_handle: UniformListScrollHandle,
     pr_number: Option<u32>,
     pr_title: Option<String>,
+    comment_store: PRCommentStore,
 }
 
 impl PRReviewPanel {
@@ -84,6 +95,7 @@ impl PRReviewPanel {
             scroll_handle: UniformListScrollHandle::new(),
             pr_number: None,
             pr_title: None,
+            comment_store: PRCommentStore::new(),
         }
     }
 
@@ -139,6 +151,64 @@ impl PRReviewPanel {
         self.pending_comments.clear();
         cx.notify();
     }
+
+    pub fn comment_store(&self) -> &PRCommentStore {
+        &self.comment_store
+    }
+
+    pub fn comment_store_mut(&mut self) -> &mut PRCommentStore {
+        &mut self.comment_store
+    }
+
+    pub fn load_comments_from_github(
+        &mut self,
+        comments: Vec<github_client::PullRequestReviewComment>,
+        cx: &mut Context<Self>,
+    ) {
+        self.comment_store.clear();
+
+        for github_comment in comments {
+            let line = github_comment.line.or(github_comment.original_line).unwrap_or(0);
+
+            let side = match github_comment.side {
+                Some(github_client::DiffSide::Left) => crate::CommentSide::Left,
+                Some(github_client::DiffSide::Right) | None => crate::CommentSide::Right,
+            };
+
+            let comment = InlineCommentData {
+                id: github_comment.id,
+                author: github_comment.author.login,
+                body: github_comment.body,
+                path: github_comment.path,
+                line,
+                side,
+                created_at: github_comment.created_at.to_rfc3339(),
+                in_reply_to: github_comment.in_reply_to_id,
+                is_pending: false,
+            };
+
+            self.comment_store.add_comment(comment);
+        }
+
+        cx.notify();
+    }
+
+    pub fn clear_comments(&mut self, cx: &mut Context<Self>) {
+        self.comment_store.clear();
+        cx.notify();
+    }
+
+    pub fn get_line_comments(&self, path: &str, line: u32) -> Vec<&InlineCommentData> {
+        self.comment_store.get_line_comments(path, line)
+    }
+
+    pub fn has_comments_for_line(&self, path: &str, line: u32) -> bool {
+        self.comment_store.has_comments_for_line(path, line)
+    }
+
+    pub fn files_with_inline_comments(&self) -> Vec<&str> {
+        self.comment_store.files_with_comments()
+    }
 }
 
 pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
@@ -152,6 +222,7 @@ pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
 
 impl EventEmitter<PanelEvent> for PRReviewPanel {}
 impl EventEmitter<DismissEvent> for PRReviewPanel {}
+impl EventEmitter<PRReviewPanelEvent> for PRReviewPanel {}
 
 impl Focusable for PRReviewPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -287,6 +358,557 @@ impl Render for PRReviewPanel {
             .bg(cx.theme().colors().panel_background)
             .child(header)
             .child(body)
+    }
+}
+
+/// PRCommentStore manages inline comments for pull request files
+/// It provides efficient lookup by file path and line number
+#[derive(Default, Debug, Clone)]
+pub struct PRCommentStore {
+    comments_by_file: HashMap<String, Vec<InlineCommentData>>,
+}
+
+impl PRCommentStore {
+    pub fn new() -> Self {
+        Self {
+            comments_by_file: HashMap::new(),
+        }
+    }
+
+    /// Set all comments for a specific file path
+    pub fn set_comments(&mut self, path: &str, comments: Vec<InlineCommentData>) {
+        self.comments_by_file.insert(path.to_string(), comments);
+    }
+
+    /// Get all comments for a specific file path
+    pub fn get_comments(&self, path: &str) -> Option<&Vec<InlineCommentData>> {
+        self.comments_by_file.get(path)
+    }
+
+    /// Get comments for a specific line in a file
+    pub fn get_line_comments(&self, path: &str, line: u32) -> Vec<&InlineCommentData> {
+        self.comments_by_file
+            .get(path)
+            .map(|comments| comments.iter().filter(|c| c.line == line).collect())
+            .unwrap_or_default()
+    }
+
+    /// Add a single comment to a file
+    pub fn add_comment(&mut self, comment: InlineCommentData) {
+        let path = comment.path.clone();
+        self.comments_by_file
+            .entry(path)
+            .or_insert_with(Vec::new)
+            .push(comment);
+    }
+
+    /// Remove all comments for a specific file
+    pub fn remove_file_comments(&mut self, path: &str) {
+        self.comments_by_file.remove(path);
+    }
+
+    /// Clear all comments from the store
+    pub fn clear(&mut self) {
+        self.comments_by_file.clear();
+    }
+
+    /// Get all file paths that have comments
+    pub fn files_with_comments(&self) -> Vec<&str> {
+        self.comments_by_file.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get total number of comments across all files
+    pub fn total_comment_count(&self) -> usize {
+        self.comments_by_file
+            .values()
+            .map(|comments| comments.len())
+            .sum()
+    }
+
+    /// Check if a specific file has comments
+    pub fn has_comments_for_file(&self, path: &str) -> bool {
+        self.comments_by_file
+            .get(path)
+            .map(|comments| !comments.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Check if a specific line in a file has comments
+    pub fn has_comments_for_line(&self, path: &str, line: u32) -> bool {
+        !self.get_line_comments(path, line).is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pr_comment_store_new() {
+        let store = PRCommentStore::new();
+        assert_eq!(store.total_comment_count(), 0);
+        assert!(store.files_with_comments().is_empty());
+    }
+
+    #[test]
+    fn test_set_and_get_comments() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Great work!".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Needs improvement".to_string(),
+            "src/main.rs".to_string(),
+            15,
+            2,
+        );
+
+        store.set_comments("src/main.rs", vec![comment1.clone(), comment2.clone()]);
+
+        let comments = store.get_comments("src/main.rs");
+        assert!(comments.is_some());
+        assert_eq!(comments.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_get_line_comments() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment on line 10".to_string(),
+            "src/lib.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Another comment on line 10".to_string(),
+            "src/lib.rs".to_string(),
+            10,
+            2,
+        );
+
+        let comment3 = InlineCommentData::new(
+            "user3".to_string(),
+            "Comment on line 20".to_string(),
+            "src/lib.rs".to_string(),
+            20,
+            3,
+        );
+
+        store.set_comments("src/lib.rs", vec![comment1, comment2, comment3]);
+
+        let line_10_comments = store.get_line_comments("src/lib.rs", 10);
+        assert_eq!(line_10_comments.len(), 2);
+
+        let line_20_comments = store.get_line_comments("src/lib.rs", 20);
+        assert_eq!(line_20_comments.len(), 1);
+
+        let line_30_comments = store.get_line_comments("src/lib.rs", 30);
+        assert_eq!(line_30_comments.len(), 0);
+    }
+
+    #[test]
+    fn test_add_comment() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "First comment".to_string(),
+            "src/test.rs".to_string(),
+            5,
+            1,
+        );
+
+        store.add_comment(comment1);
+        assert_eq!(store.total_comment_count(), 1);
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Second comment".to_string(),
+            "src/test.rs".to_string(),
+            10,
+            2,
+        );
+
+        store.add_comment(comment2);
+        assert_eq!(store.total_comment_count(), 2);
+
+        let comments = store.get_comments("src/test.rs");
+        assert_eq!(comments.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_remove_file_comments() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment 1".to_string(),
+            "src/file1.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Comment 2".to_string(),
+            "src/file2.rs".to_string(),
+            20,
+            2,
+        );
+
+        store.add_comment(comment1);
+        store.add_comment(comment2);
+        assert_eq!(store.files_with_comments().len(), 2);
+
+        store.remove_file_comments("src/file1.rs");
+        assert_eq!(store.files_with_comments().len(), 1);
+        assert!(!store.has_comments_for_file("src/file1.rs"));
+        assert!(store.has_comments_for_file("src/file2.rs"));
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment 1".to_string(),
+            "src/file1.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Comment 2".to_string(),
+            "src/file2.rs".to_string(),
+            20,
+            2,
+        );
+
+        store.add_comment(comment1);
+        store.add_comment(comment2);
+        assert_eq!(store.total_comment_count(), 2);
+
+        store.clear();
+        assert_eq!(store.total_comment_count(), 0);
+        assert!(store.files_with_comments().is_empty());
+    }
+
+    #[test]
+    fn test_files_with_comments() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment 1".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Comment 2".to_string(),
+            "src/lib.rs".to_string(),
+            20,
+            2,
+        );
+
+        let comment3 = InlineCommentData::new(
+            "user3".to_string(),
+            "Comment 3".to_string(),
+            "src/test.rs".to_string(),
+            30,
+            3,
+        );
+
+        store.add_comment(comment1);
+        store.add_comment(comment2);
+        store.add_comment(comment3);
+
+        let files = store.files_with_comments();
+        assert_eq!(files.len(), 3);
+        assert!(files.contains(&"src/main.rs"));
+        assert!(files.contains(&"src/lib.rs"));
+        assert!(files.contains(&"src/test.rs"));
+    }
+
+    #[test]
+    fn test_total_comment_count() {
+        let mut store = PRCommentStore::new();
+        assert_eq!(store.total_comment_count(), 0);
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment 1".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+        store.add_comment(comment1);
+        assert_eq!(store.total_comment_count(), 1);
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Comment 2".to_string(),
+            "src/main.rs".to_string(),
+            20,
+            2,
+        );
+        store.add_comment(comment2);
+        assert_eq!(store.total_comment_count(), 2);
+
+        let comment3 = InlineCommentData::new(
+            "user3".to_string(),
+            "Comment 3".to_string(),
+            "src/lib.rs".to_string(),
+            15,
+            3,
+        );
+        store.add_comment(comment3);
+        assert_eq!(store.total_comment_count(), 3);
+    }
+
+    #[test]
+    fn test_has_comments_for_file() {
+        let mut store = PRCommentStore::new();
+
+        let comment = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+
+        store.add_comment(comment);
+
+        assert!(store.has_comments_for_file("src/main.rs"));
+        assert!(!store.has_comments_for_file("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_has_comments_for_line() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "Comment on line 10".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Comment on line 20".to_string(),
+            "src/main.rs".to_string(),
+            20,
+            2,
+        );
+
+        store.add_comment(comment1);
+        store.add_comment(comment2);
+
+        assert!(store.has_comments_for_line("src/main.rs", 10));
+        assert!(store.has_comments_for_line("src/main.rs", 20));
+        assert!(!store.has_comments_for_line("src/main.rs", 30));
+        assert!(!store.has_comments_for_line("src/lib.rs", 10));
+    }
+
+    #[test]
+    fn test_get_comments_for_nonexistent_file() {
+        let store = PRCommentStore::new();
+
+        let comments = store.get_comments("nonexistent.rs");
+        assert!(comments.is_none());
+
+        let line_comments = store.get_line_comments("nonexistent.rs", 10);
+        assert!(line_comments.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_comments_same_line() {
+        let mut store = PRCommentStore::new();
+
+        let comment1 = InlineCommentData::new(
+            "user1".to_string(),
+            "First comment".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            1,
+        );
+
+        let comment2 = InlineCommentData::new(
+            "user2".to_string(),
+            "Second comment".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            2,
+        );
+
+        let comment3 = InlineCommentData::new(
+            "user3".to_string(),
+            "Third comment".to_string(),
+            "src/main.rs".to_string(),
+            10,
+            3,
+        );
+
+        store.add_comment(comment1);
+        store.add_comment(comment2);
+        store.add_comment(comment3);
+
+        let line_comments = store.get_line_comments("src/main.rs", 10);
+        assert_eq!(line_comments.len(), 3);
+    }
+
+    #[gpui::test]
+    fn test_pr_review_panel_creation(cx: &mut gpui::TestAppContext) {
+        let panel = cx.new(|cx| PRReviewPanel::new(cx));
+
+        panel.read_with(cx, |panel, _cx| {
+            assert_eq!(panel.comment_store().total_comment_count(), 0);
+            assert_eq!(panel.session_state, ReviewSessionState::NotStarted);
+        });
+    }
+
+    #[gpui::test]
+    fn test_pr_review_panel_start_review(cx: &mut gpui::TestAppContext) {
+        let panel = cx.new(|cx| PRReviewPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            panel.start_review(42, "Test PR".to_string(), cx);
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert_eq!(panel.session_state, ReviewSessionState::InProgress);
+            assert_eq!(panel.pr_number, Some(42));
+            assert_eq!(panel.pr_title, Some("Test PR".to_string()));
+        });
+    }
+
+    #[gpui::test]
+    fn test_pr_review_panel_comment_store_integration(cx: &mut gpui::TestAppContext) {
+        let panel = cx.new(|cx| PRReviewPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            let comment = InlineCommentData::new(
+                "test_user".to_string(),
+                "This is a comment".to_string(),
+                "src/main.rs".to_string(),
+                42,
+                1,
+            );
+
+            panel.comment_store_mut().add_comment(comment);
+            cx.notify();
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert_eq!(panel.comment_store().total_comment_count(), 1);
+            assert!(panel.has_comments_for_line("src/main.rs", 42));
+            assert!(!panel.has_comments_for_line("src/main.rs", 100));
+
+            let line_comments = panel.get_line_comments("src/main.rs", 42);
+            assert_eq!(line_comments.len(), 1);
+            assert_eq!(line_comments[0].author, "test_user");
+            assert_eq!(line_comments[0].body, "This is a comment");
+        });
+    }
+
+    #[gpui::test]
+    fn test_pr_review_panel_clear_comments(cx: &mut gpui::TestAppContext) {
+        let panel = cx.new(|cx| PRReviewPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            let comment1 = InlineCommentData::new(
+                "user1".to_string(),
+                "Comment 1".to_string(),
+                "src/main.rs".to_string(),
+                10,
+                1,
+            );
+
+            let comment2 = InlineCommentData::new(
+                "user2".to_string(),
+                "Comment 2".to_string(),
+                "src/lib.rs".to_string(),
+                20,
+                2,
+            );
+
+            panel.comment_store_mut().add_comment(comment1);
+            panel.comment_store_mut().add_comment(comment2);
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert_eq!(panel.comment_store().total_comment_count(), 2);
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.clear_comments(cx);
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert_eq!(panel.comment_store().total_comment_count(), 0);
+        });
+    }
+
+    #[gpui::test]
+    fn test_pr_review_panel_files_with_comments(cx: &mut gpui::TestAppContext) {
+        let panel = cx.new(|cx| PRReviewPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            let comment1 = InlineCommentData::new(
+                "user1".to_string(),
+                "Comment 1".to_string(),
+                "src/main.rs".to_string(),
+                10,
+                1,
+            );
+
+            let comment2 = InlineCommentData::new(
+                "user2".to_string(),
+                "Comment 2".to_string(),
+                "src/lib.rs".to_string(),
+                20,
+                2,
+            );
+
+            let comment3 = InlineCommentData::new(
+                "user3".to_string(),
+                "Comment 3".to_string(),
+                "src/test.rs".to_string(),
+                30,
+                3,
+            );
+
+            panel.comment_store_mut().add_comment(comment1);
+            panel.comment_store_mut().add_comment(comment2);
+            panel.comment_store_mut().add_comment(comment3);
+            cx.notify();
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            let files = panel.files_with_inline_comments();
+            assert_eq!(files.len(), 3);
+            assert!(files.contains(&"src/main.rs"));
+            assert!(files.contains(&"src/lib.rs"));
+            assert!(files.contains(&"src/test.rs"));
+        });
     }
 }
 

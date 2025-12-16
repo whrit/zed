@@ -1,10 +1,12 @@
 use editor::{Editor, EditorElement, EditorStyle};
-use github_client::{MergeMethod, MergePRParams};
+use github_client::{GitHubClient, MergeMethod, MergePRParams};
 use gpui::*;
+use std::sync::Arc;
 use ui::{
     Button, ButtonSize, ButtonStyle, Label, LabelSize, ModalFooter, ModalHeader, RadioWithLabel,
     prelude::*,
 };
+use util::ResultExt;
 use workspace::{DismissDecision, ModalView};
 
 actions!(pr_merge, [MergePullRequest, ConfirmMerge, CancelMerge]);
@@ -16,6 +18,11 @@ pub struct MergePRModal {
     commit_title_editor: Entity<Editor>,
     commit_message_editor: Entity<Editor>,
     focus_handle: FocusHandle,
+    github_client: Arc<GitHubClient>,
+    owner: String,
+    repo: String,
+    merging: bool,
+    error: Option<String>,
 }
 
 impl EventEmitter<DismissEvent> for MergePRModal {}
@@ -40,6 +47,9 @@ impl MergePRModal {
     pub fn new(
         pr_number: u32,
         pr_title: String,
+        github_client: Arc<GitHubClient>,
+        owner: String,
+        repo: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -69,6 +79,11 @@ impl MergePRModal {
             commit_title_editor,
             commit_message_editor,
             focus_handle,
+            github_client,
+            owner,
+            repo,
+            merging: false,
+            error: None,
         }
     }
 
@@ -102,7 +117,38 @@ impl MergePRModal {
     }
 
     fn confirm(&mut self, _action: &ConfirmMerge, _window: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(DismissEvent);
+        if self.merging {
+            return;
+        }
+
+        let params = self.merge_params(cx);
+        let github_client = self.github_client.clone();
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let pr_number = self.pr_number;
+
+        self.merging = true;
+        self.error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = github_client
+                .merge_pull_request(&owner, &repo, pr_number, params)
+                .await;
+
+            this.update(cx, |this, cx| {
+                this.merging = false;
+                match result {
+                    Ok(_) => cx.emit(DismissEvent),
+                    Err(e) => {
+                        this.error = Some(e.to_string());
+                        cx.notify();
+                    }
+                }
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     fn cancel(&mut self, _action: &CancelMerge, _window: &mut Window, cx: &mut Context<Self>) {
@@ -125,7 +171,13 @@ impl MergePRModal {
 impl Render for MergePRModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_editors = self.should_show_commit_editors();
-        let merge_button_label = self.merge_button_label().to_string();
+        let merge_button_label = if self.merging {
+            "Merging...".to_string()
+        } else {
+            self.merge_button_label().to_string()
+        };
+        let is_merging = self.merging;
+        let error_message = self.error.clone();
 
         v_flex()
             .id("pr-merge-modal")
@@ -149,6 +201,15 @@ impl Render for MergePRModal {
                 v_flex()
                     .p_4()
                     .gap_3()
+                    .when_some(error_message, |this, error| {
+                        this.child(
+                            div()
+                                .p_2()
+                                .bg(gpui::red())
+                                .rounded_md()
+                                .child(Label::new(format!("Error: {}", error)).color(Color::Error)),
+                        )
+                    })
                     .child(
                         v_flex()
                             .gap_2()
@@ -245,6 +306,7 @@ impl Render for MergePRModal {
                         Button::new("cancel", "Cancel")
                             .style(ButtonStyle::Subtle)
                             .size(ButtonSize::Default)
+                            .disabled(is_merging)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.cancel(&CancelMerge, window, cx);
                             })),
@@ -253,6 +315,7 @@ impl Render for MergePRModal {
                         Button::new("confirm", merge_button_label)
                             .style(ButtonStyle::Filled)
                             .size(ButtonSize::Default)
+                            .disabled(is_merging)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.confirm(&ConfirmMerge, window, cx);
                             })),
@@ -261,3 +324,295 @@ impl Render for MergePRModal {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use github_client::MergeResult;
+    use http_client::FakeHttpClient;
+
+    #[gpui::test]
+    fn test_merge_params_generation_with_empty_fields(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            Ok(http::Response::builder()
+                .status(200)
+                .body(vec![].into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                let params = modal.merge_params(cx);
+
+                assert_eq!(params.commit_title, None);
+                assert_eq!(params.commit_message, None);
+                assert_eq!(params.sha, None);
+                assert_eq!(params.merge_method, Some(MergeMethod::Merge));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_merge_params_generation_with_custom_title_and_message(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            Ok(http::Response::builder()
+                .status(200)
+                .body(vec![].into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                modal.commit_title_editor.update(cx, |editor, cx| {
+                    editor.set_text("Custom title", window, cx);
+                });
+                modal.commit_message_editor.update(cx, |editor, cx| {
+                    editor.set_text("Custom message", window, cx);
+                });
+                modal.set_merge_method(MergeMethod::Squash, cx);
+
+                let params = modal.merge_params(cx);
+
+                assert_eq!(params.commit_title, Some("Custom title".to_string()));
+                assert_eq!(params.commit_message, Some("Custom message".to_string()));
+                assert_eq!(params.merge_method, Some(MergeMethod::Squash));
+            });
+        });
+    }
+
+    #[gpui::test]
+    async fn test_confirm_sets_merging_state(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            let merge_result = MergeResult {
+                sha: "merged_sha".to_string(),
+                merged: true,
+                message: "Successfully merged".to_string(),
+            };
+            let body = serde_json::to_vec(&merge_result).unwrap();
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                assert!(!modal.merging);
+                modal.confirm(&ConfirmMerge, window, cx);
+                assert!(modal.merging);
+            });
+        });
+
+        cx.background_executor.run_until_parked();
+
+        modal.read_with(cx, |modal, _cx| {
+            assert!(!modal.merging);
+            assert!(modal.error.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_confirm_handles_error(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            Ok(http::Response::builder()
+                .status(422)
+                .body(b"{\"message\":\"Pull request is not mergeable\"}".to_vec().into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                modal.confirm(&ConfirmMerge, window, cx);
+            });
+        });
+
+        cx.background_executor.run_until_parked();
+
+        modal.read_with(cx, |modal, _cx| {
+            assert!(!modal.merging);
+            assert!(modal.error.is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn test_confirm_prevents_duplicate_merges(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            let merge_result = MergeResult {
+                sha: "merged_sha".to_string(),
+                merged: true,
+                message: "Successfully merged".to_string(),
+            };
+            let body = serde_json::to_vec(&merge_result).unwrap();
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                modal.confirm(&ConfirmMerge, window, cx);
+                assert!(modal.merging);
+
+                modal.confirm(&ConfirmMerge, window, cx);
+                assert!(modal.merging);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_merge_method_selection(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            Ok(http::Response::builder()
+                .status(200)
+                .body(vec![].into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                assert_eq!(modal.merge_method, MergeMethod::Merge);
+
+                modal.set_merge_method(MergeMethod::Squash, cx);
+                assert_eq!(modal.merge_method, MergeMethod::Squash);
+
+                modal.set_merge_method(MergeMethod::Rebase, cx);
+                assert_eq!(modal.merge_method, MergeMethod::Rebase);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_should_show_commit_editors_only_for_squash(cx: &mut gpui::TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            Ok(http::Response::builder()
+                .status(200)
+                .body(vec![].into())
+                .unwrap())
+        });
+        let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+
+        let modal = cx.new(|cx| {
+            cx.new_window(|window, cx| {
+                MergePRModal::new(
+                    42,
+                    "Test PR".to_string(),
+                    github_client.clone(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        modal.update(cx, |modal, cx| {
+            let window = modal.entity_id();
+            cx.update_window(window, |modal, window, cx| {
+                modal.set_merge_method(MergeMethod::Merge, cx);
+                assert!(!modal.should_show_commit_editors());
+
+                modal.set_merge_method(MergeMethod::Squash, cx);
+                assert!(modal.should_show_commit_editors());
+
+                modal.set_merge_method(MergeMethod::Rebase, cx);
+                assert!(!modal.should_show_commit_editors());
+            });
+        });
+    }
+}
