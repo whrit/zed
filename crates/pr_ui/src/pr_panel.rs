@@ -11,14 +11,15 @@ use workspace::{
 use github_client::{GitHubClient, PRState};
 use std::sync::Arc;
 
-use crate::{CheckoutPullRequest, CreatePullRequest, MergePullRequest, TogglePRPanel, PullRequestData, PullRequestState};
+use crate::{CheckoutPullRequest, CreatePullRequest, MergePullRequest, TogglePRPanel, PullRequestData, PullRequestState, GitHubRepo};
 
-actions!(pr_panel, [Refresh, Close]);
+actions!(pr_panel, [Refresh, Close, SignInToGitHub]);
 
 pub struct PRPanel {
     focus_handle: FocusHandle,
     width: Option<Pixels>,
     github_client: Option<Arc<GitHubClient>>,
+    github_repo: Option<GitHubRepo>,
     pull_requests: Vec<PullRequestData>,
     loading: bool,
     error: Option<String>,
@@ -33,6 +34,7 @@ impl PRPanel {
             focus_handle: cx.focus_handle(),
             width: None,
             github_client: None,
+            github_repo: None,
             pull_requests: Vec::new(),
             loading: false,
             error: None,
@@ -47,13 +49,49 @@ impl PRPanel {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
-        let panel = cx.new(|cx| Self::new(cx));
+        let http_client = workspace.read(cx).client().http_client();
+
+        let panel = cx.new(|cx| {
+            let mut panel = Self::new(cx);
+            panel.github_client = Some(Arc::new(GitHubClient::new(http_client)));
+            panel
+        });
 
         workspace.update(cx, |workspace, cx| {
             workspace.add_panel(panel.clone(), window, cx);
         });
 
         panel
+    }
+
+    pub fn set_github_token(&mut self, token: String, cx: &mut Context<Self>) {
+        if let Some(client) = &self.github_client {
+            let http_client = client.http_client();
+            self.github_client = Some(Arc::new(GitHubClient::with_token(http_client, token)));
+        }
+        cx.notify();
+    }
+
+    pub fn has_github_token(&self) -> bool {
+        self.github_client
+            .as_ref()
+            .and_then(|client| client.token())
+            .is_some()
+    }
+
+    pub fn on_repo_detected(&mut self, repo: GitHubRepo, cx: &mut Context<Self>) {
+        self.github_repo = Some(repo);
+        if self.has_github_token() {
+            self.refresh_pull_requests(cx);
+        }
+    }
+
+    pub fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
+        if let Some(repo) = &self.github_repo {
+            let owner = repo.owner.clone();
+            let repo_name = repo.repo.clone();
+            self.load_pull_requests(&owner, &repo_name, cx);
+        }
     }
 
     pub fn load_pull_requests(&mut self, owner: &str, repo: &str, cx: &mut Context<Self>) {
@@ -109,6 +147,24 @@ impl PRPanel {
 pub fn register(workspace: &mut Workspace, _cx: &mut Context<Workspace>) {
     workspace.register_action(|workspace, _: &TogglePRPanel, window, cx| {
         workspace.toggle_panel_focus::<PRPanel>(window, cx);
+    });
+
+    workspace.register_action(|workspace, _: &SignInToGitHub, window, cx| {
+        use crate::GitHubAuthModal;
+
+        let Some(panel) = workspace.panel::<PRPanel>(cx) else {
+            return;
+        };
+
+        let github_client = panel.read_with(cx, |panel, _cx| {
+            panel.github_client.clone()
+        });
+
+        if let Some(github_client) = github_client {
+            workspace.toggle_modal(window, cx, |window, cx| {
+                GitHubAuthModal::new(github_client.clone(), window, cx)
+            });
+        }
     });
 
     workspace.register_action(|workspace, _: &CheckoutPullRequest, _window, cx| {
@@ -258,7 +314,21 @@ impl Render for PRPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::PRListItem;
 
-        let content = if self.loading {
+        let content = if !self.has_github_token() {
+            v_flex()
+                .flex_1()
+                .justify_center()
+                .items_center()
+                .gap_4()
+                .child(Label::new("Sign in to GitHub to view pull requests").color(Color::Muted))
+                .child(
+                    Button::new("sign-in-github", "Sign in to GitHub")
+                        .style(ButtonStyle::Filled)
+                        .on_click(|_event, _window, cx| {
+                            cx.dispatch_action(&SignInToGitHub);
+                        }),
+                )
+        } else if self.loading {
             v_flex()
                 .flex_1()
                 .justify_center()
@@ -525,6 +595,193 @@ mod tests {
         let panel = cx.new(|cx| PRPanel::new(cx));
         panel.read_with(&cx, |panel, window, cx| {
             assert_eq!(panel.icon(window, cx), Some(IconName::PullRequest));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_panel_new_initializes_github_client(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| PRPanel::new(cx));
+        panel.read_with(cx, |panel, _cx| {
+            assert!(panel.github_client.is_some(), "GitHub client should be initialized");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_set_github_token(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| PRPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            panel.set_github_token("test_token".to_string(), cx);
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(panel.has_github_token());
+            if let Some(client) = &panel.github_client {
+                assert_eq!(client.token(), Some("test_token"));
+            }
+        });
+    }
+
+    #[gpui::test]
+    async fn test_has_github_token_returns_false_without_token(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| PRPanel::new(cx));
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(!panel.has_github_token());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_has_github_token_returns_true_with_token(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| PRPanel::new(cx));
+
+        panel.update(cx, |panel, cx| {
+            panel.set_github_token("test_token".to_string(), cx);
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(panel.has_github_token());
+        });
+    }
+
+    #[gpui::test]
+    async fn test_github_repo_tracking(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            panel.github_repo = Some(crate::GitHubRepo {
+                owner: "test_owner".to_string(),
+                repo: "test_repo".to_string(),
+            });
+            panel
+        });
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(panel.github_repo.is_some());
+            let repo = panel.github_repo.as_ref().unwrap();
+            assert_eq!(repo.owner, "test_owner");
+            assert_eq!(repo.repo, "test_repo");
+        });
+    }
+
+    #[gpui::test]
+    async fn test_refresh_pull_requests_with_both_client_and_repo(cx: &mut TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            let prs: Vec<PullRequest> = vec![];
+            let body = serde_json::to_vec(&prs).expect("serialize prs");
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .expect("build response"))
+        });
+
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+            panel.github_client = Some(github_client);
+            panel.github_repo = Some(crate::GitHubRepo {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            });
+            panel
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.refresh_pull_requests(cx);
+            assert!(panel.loading);
+        });
+
+        cx.run_until_parked();
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(!panel.loading);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_refresh_pull_requests_without_client(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            panel.github_client = None;
+            panel.github_repo = Some(crate::GitHubRepo {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            });
+            panel
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.refresh_pull_requests(cx);
+            assert!(!panel.loading);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_refresh_pull_requests_without_repo(cx: &mut TestAppContext) {
+        let http_client = FakeHttpClient::with_200_response();
+
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+            panel.github_client = Some(github_client);
+            panel.github_repo = None;
+            panel
+        });
+
+        panel.update(cx, |panel, cx| {
+            panel.refresh_pull_requests(cx);
+            assert!(!panel.loading);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_on_repo_detected_with_token_loads_prs(cx: &mut TestAppContext) {
+        let http_client = FakeHttpClient::create(|_request| async move {
+            let prs: Vec<PullRequest> = vec![];
+            let body = serde_json::to_vec(&prs).expect("serialize prs");
+            Ok(http::Response::builder()
+                .status(200)
+                .body(body.into())
+                .expect("build response"))
+        });
+
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            let github_client = Arc::new(GitHubClient::with_token(http_client, "test_token".to_string()));
+            panel.github_client = Some(github_client);
+            panel
+        });
+
+        panel.update(cx, |panel, cx| {
+            let repo = crate::GitHubRepo {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            };
+            panel.on_repo_detected(repo, cx);
+            assert!(panel.loading);
+        });
+
+        cx.run_until_parked();
+
+        panel.read_with(cx, |panel, _cx| {
+            assert!(!panel.loading);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_on_repo_detected_without_token_does_not_load(cx: &mut TestAppContext) {
+        let panel = cx.new(|cx| {
+            let mut panel = PRPanel::new(cx);
+            panel.github_client = None;
+            panel
+        });
+
+        panel.update(cx, |panel, cx| {
+            let repo = crate::GitHubRepo {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            };
+            panel.on_repo_detected(repo, cx);
+            assert!(!panel.loading);
         });
     }
 }

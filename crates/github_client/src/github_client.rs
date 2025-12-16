@@ -59,6 +59,10 @@ impl GitHubClient {
         &self.base_url
     }
 
+    pub fn http_client(&self) -> Arc<dyn HttpClient> {
+        Arc::clone(&self.http_client)
+    }
+
     pub(crate) async fn send_request<T>(&self, request: Request<AsyncBody>) -> Result<T>
     where
         T: serde::de::DeserializeOwned,

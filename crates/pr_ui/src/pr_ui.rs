@@ -3,7 +3,12 @@
 use gpui::{actions, App};
 use workspace::Workspace;
 
+mod github_auth_modal;
+mod github_remote;
 mod inline_comment;
+
+pub use github_auth_modal::{CancelAuth, GitHubAuthEvent, GitHubAuthModal, StartAuth};
+pub use github_remote::GitHubRepo;
 mod pr_checkout;
 mod pr_comment_thread;
 mod pr_create_modal;
